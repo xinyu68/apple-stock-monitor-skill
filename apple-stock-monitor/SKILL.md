@@ -19,7 +19,7 @@ On Windows, prefer `py -3` when `python` is unavailable. The script performs one
 
 ## Workflow
 
-1. At the beginning of the first use after installation, run `status`. If `configured` is false, proactively tell the user that Bark is not configured and ask only for their full Bark URL or key. Never echo or commit the secret. A one-time stock query may continue while waiting for it, but do not create a recurring Agent task until `configure --bark-url ... --test` succeeds.
+1. On every invocation, run `status` before any stock or scheduling action. If `configured` is false, proactively tell the user that Bark is not configured and ask only for their full Bark URL or key; do this even when the user requested only a one-time query. Never echo or commit the secret. The one-time query may continue while waiting for it, but do not create a recurring Agent task until `configure --bark-url ... --test` succeeds.
 2. Translate the user's request into an exact `--model`, `--capacity`, `--color`, and either `--city` or `--scope china`. Do not silently broaden `iPhone 17` to `iPhone 17e`, Pro, Pro Max, Plus, Air, or another family.
 3. Run `check` once. Report every matched Apple part number and store. For broad queries, a compact summary is acceptable only if the complete part-number mapping remains visible. Treat `unknown` or command failure as an error, never as out of stock.
 4. Group multi-store results by store. When using a Markdown table, emit a valid header cell for each column and do not omit variants returned by the script.

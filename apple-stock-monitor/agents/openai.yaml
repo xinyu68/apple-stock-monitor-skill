@@ -1,4 +1,4 @@
 interface:
   display_name: "Apple 库存监控"
   short_description: "监控 Apple 官方到店取货库存并通过 Bark 推送"
-  default_prompt: "Use $apple-stock-monitor to monitor Beijing Apple Stores for iPhone 18 Pro Max 256GB silver inventory."
+  default_prompt: "Use $apple-stock-monitor to check Bark configuration first, ask me for the Bark Key if missing, and then set up my Apple Store inventory monitor."

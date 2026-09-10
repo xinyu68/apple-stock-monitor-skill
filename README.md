@@ -17,7 +17,7 @@
 ```text
 请将已安装的 apple-stock-monitor 更新到这个仓库的最新版本：
 https://github.com/xinyu68/apple-stock-monitor-skill/tree/main/apple-stock-monitor
-如果安装器不支持覆盖，只删除并重新安装 apple-stock-monitor 的 Skill 目录；保留用户目录 .apple-stock-monitor 中的 Bark 配置、监控状态和定时任务。更新后请校验 Skill 并运行测试。
+如果安装器不支持覆盖，只删除并重新安装 apple-stock-monitor 的 Skill 目录；保留用户目录 .apple-stock-monitor 中的 Bark 配置和监控状态，并保留 Agent 中已有的监控任务。更新后请校验 Skill 并运行测试。
 ```
 
 ## 使用示例
@@ -33,7 +33,7 @@ https://github.com/xinyu68/apple-stock-monitor-skill/tree/main/apple-stock-monit
 停止 beijing-18-pro-max 监控任务。
 ```
 
-脚本仅使用 Python 标准库。配置默认保存在用户目录的 `.apple-stock-monitor` 中，Bark Key 不会写入仓库。
+脚本仅使用 Python 标准库。配置默认保存在用户目录的 `.apple-stock-monitor` 中，Bark Key 不会写入仓库。周期运行由 Codex、Hermes 等 Agent 自带的定时任务功能负责，不创建 Windows 任务计划或系统 crontab。
 
 同一门店、同一料号持续有货时最多每 30 分钟推送一次；如果库存先变为无货或不可自提，之后再次有货，则立即推送，不等待冷却时间。多个监控任务的提醒状态彼此不会互相清除。
 
@@ -41,7 +41,7 @@ https://github.com/xinyu68/apple-stock-monitor-skill/tree/main/apple-stock-monit
 
 - 查询的是 Apple 商城前端使用的官方域名接口，但它不是 Apple 承诺稳定的公开开发者 API
 - 只查询和提醒，不加购、不预留、不下单
-- 本机任务要求电脑保持开机并联网
+- 本机型 Agent 定时任务通常要求电脑保持开机、联网且 Agent 宿主可用
 - 全国范围应使用至少三分钟间隔，避免高频请求触发限制
 
 维护与接口迁移说明见 [`apple-stock-monitor/references/maintenance.md`](apple-stock-monitor/references/maintenance.md)。

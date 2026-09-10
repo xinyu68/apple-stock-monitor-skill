@@ -1,38 +1,36 @@
-# 定时任务与运行环境
+# Agent 原生定时任务
 
-仅在创建、修复或迁移定时任务时读取本文。
+仅在创建、修复或迁移监控任务时读取本文。
 
-## 推荐策略
+## 调度原则
 
-- 单城市、少量 SKU：每 1 分钟执行一次 `check`
-- 中国大陆全部门店：至少每 3 分钟执行一次，并使用内置位置分片
-- 给查询时间增加轻微抖动，避免大量实例同时访问 Apple
-- 到货只在状态由非有货变为有货时推送
+- 只使用当前 Agent 提供的定时任务、automation、heartbeat 或 cron 工具
+- 不创建 Windows Task Scheduler、crontab、launchd 或 systemd timer
+- 单城市、少量 SKU 建议每 1 分钟运行一次；中国大陆全部门店至少每 3 分钟一次
+- 创建前先执行一次 `check`，并确认 Bark 测试推送成功
+- 以监控条件生成稳定的任务名称；条件相同则更新已有任务，不创建重复任务
+- 用同一 Agent 调度器创建配套 watchdog，建议间隔为 `max(5 分钟, 查询间隔 × 3)`
 
-## 调度方式
+## 定时任务内容
 
-`schedule create` 在 Windows 创建两个 Task Scheduler 任务，在 macOS/Linux 创建两条用户 crontab：
+保存到 Agent 调度器的提示词应包含完整的城市或全国范围、型号、容量、颜色和检查频率，并要求每次运行：
 
-1. 库存检查任务
-2. 独立 watchdog 任务
+1. 使用 `apple-stock-monitor` Skill
+2. 执行一次对应的 `check` 命令
+3. 不创建新的定时任务或操作系统任务
+4. 查询成功且无需用户处理时保持安静，由脚本直接通过 Bark 发送到货提醒
+5. Bark 未配置、命令无法启动或脚本返回错误时，向用户报告任务失败
 
-Hermes Agent 支持脚本型或 Skill 型 Cron 时，也可让 Hermes 调用 `check`；机械轮询优先使用无 Agent 模式，避免每分钟消耗模型调用。
+watchdog 任务每次只执行 `watchdog --max-age <分钟>`，成功且未超时则保持安静。它与库存任务使用同一 Agent 调度器，不得落到操作系统调度器。
 
-Codex/ChatGPT 桌面定时任务需要本机保持开机且应用运行。高频库存查询优先使用脚本安装的操作系统任务，Agent 只负责配置、诊断和变更任务。
+Codex 中优先创建附着当前对话的 heartbeat automation。Hermes 或其他 Agent 使用其原生 scheduler/cron 工具，语义保持一致，不要假定具体工具名称。
 
-## 限制
+## 状态与故障
 
-- 本机断电、断网时，本机 watchdog 同样无法发送 Bark
-- 要监控整台电脑离线，必须在另一台主机部署外部心跳检查
-- Bark 服务故障时无法通过 Bark 报告 Bark 自身故障，只能写入本地状态和日志
-- 任务创建成功不等于查询成功；创建前必须先运行一次 `check` 并测试 Bark
+`status` 只显示脚本状态和 Bark 配置，不代表 Agent 定时任务是否启用。任务的启用、暂停、频率和最近运行结果必须从 Agent 的调度工具查看。
 
-## 运维命令
+Apple 接口或解析失败会由 `check` 写入状态，连续失败达到阈值后通过 Bark 推送。若 Agent 调度器本身没有启动脚本，只能依靠调度器的失败通知；本地脚本无法报告一次从未开始的运行。
 
-```text
-python scripts/apple_stock_monitor.py status
-python scripts/apple_stock_monitor.py schedule remove --name beijing-18-pro-max
-python scripts/apple_stock_monitor.py watchdog --max-age 5
-```
+本机型 Agent 调度仍可能要求电脑开机、联网且 Agent 宿主可用。Bark 服务自身故障只能记录在本地状态，无法再通过 Bark 报告。
 
-更新 Skill 后重新运行同名 `schedule create`，任务会被替换为新脚本路径和参数，不要创建名称不同但条件相同的重复任务。
+更新 Skill 后保留原任务并更新其提示词；如果安装路径改变，确认定时任务仍能定位已安装的 Skill。

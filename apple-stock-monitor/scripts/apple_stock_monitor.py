@@ -4,13 +4,11 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import html
 import json
 import os
 import platform
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -554,92 +552,17 @@ def watchdog(max_age_minutes: int) -> None:
     state = read_json(monitor_home() / "state.json", {})
     timestamp = state.get("lastSuccess")
     if not timestamp:
-        bark_push("Apple 库存任务未运行", "尚未发现成功查询记录，请检查定时任务。", notification_id="apple-stock-watchdog")
+        bark_push("Apple 库存任务未运行", "尚未发现成功查询记录，请检查 Agent 定时任务、网络和脚本。", notification_id="apple-stock-watchdog")
         return
     last_success = datetime.fromisoformat(timestamp).timestamp()
     age = time.time() - last_success
     if age > max_age_minutes * 60:
-        bark_push("Apple 库存任务心跳超时", f"已经 {int(age // 60)} 分钟没有成功查询，请检查电脑、网络和定时任务。", notification_id="apple-stock-watchdog")
-
-
-def task_slug(name: str) -> str:
-    safe = re.sub(r"[^a-zA-Z0-9_-]+", "-", name).strip("-")
-    return (safe or hashlib.sha256(name.encode()).hexdigest()[:12])[:48]
-
-
-def check_cli_args(args: argparse.Namespace) -> list[str]:
-    values = ["check", "--model", args.model]
-    if args.city:
-        values += ["--city", args.city]
-    if args.scope:
-        values += ["--scope", args.scope]
-    if args.capacity:
-        values += ["--capacity", args.capacity]
-    if args.color:
-        values += ["--color", args.color]
-    return values
-
-
-def install_schedule(args: argparse.Namespace) -> None:
-    if args.scope == "china" and args.every < 3:
-        raise MonitorError("全国监控间隔不得小于 3 分钟")
-    if not (load_config().get("barkUrl") or os.environ.get("APPLE_STOCK_BARK_URL")):
-        raise MonitorError("创建任务前必须先配置并测试 Bark")
-    home = monitor_home()
-    home.mkdir(parents=True, exist_ok=True)
-    slug = task_slug(args.name)
-    script = Path(__file__).resolve()
-    check_command = [sys.executable, str(script), *check_cli_args(args)]
-    watchdog_command = [sys.executable, str(script), "watchdog", "--max-age", str(max(5, args.every * 3))]
-    if platform.system() == "Windows":
-        check_wrapper = home / f"run-{slug}.cmd"
-        watchdog_wrapper = home / f"watchdog-{slug}.cmd"
-        check_wrapper.write_text("@echo off\r\nset PYTHONUTF8=1\r\n" + subprocess.list2cmdline(check_command) + " >> \"%~dp0monitor.log\" 2>&1\r\n", encoding="utf-8")
-        watchdog_wrapper.write_text("@echo off\r\nset PYTHONUTF8=1\r\n" + subprocess.list2cmdline(watchdog_command) + " >> \"%~dp0watchdog.log\" 2>&1\r\n", encoding="utf-8")
-        for task_name, every, wrapper in [
-            (f"AppleStockMonitor-{slug}", args.every, check_wrapper),
-            (f"AppleStockWatchdog-{slug}", max(5, args.every * 3), watchdog_wrapper)
-        ]:
-            command = ["schtasks", "/Create", "/TN", task_name, "/SC", "MINUTE", "/MO", str(every), "/TR", str(wrapper), "/F"]
-            completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
-            if completed.returncode:
-                raise MonitorError(f"创建 Windows 任务失败: {completed.stderr or completed.stdout}")
-    else:
-        marker = f"apple-stock-monitor:{slug}"
-        existing = subprocess.run(["crontab", "-l"], capture_output=True, text=True).stdout.splitlines()
-        kept = [line for line in existing if marker not in line]
-        schedule = "* * * * *" if args.every == 1 else f"*/{args.every} * * * *"
-        kept += [
-            f"{schedule} {shlex.join(check_command)} >> {shlex.quote(str(home / 'monitor.log'))} 2>&1 # {marker}",
-            f"*/{max(5, args.every * 3)} * * * * {shlex.join(watchdog_command)} >> {shlex.quote(str(home / 'watchdog.log'))} 2>&1 # {marker}"
-        ]
-        completed = subprocess.run(["crontab", "-"], input="\n".join(kept) + "\n", text=True, capture_output=True)
-        if completed.returncode:
-            raise MonitorError(f"创建 crontab 失败: {completed.stderr}")
-    write_json(home / f"job-{slug}.json", {"name": args.name, "everyMinutes": args.every, "arguments": check_cli_args(args), "createdAt": utc_now()})
-    print(json.dumps({"created": args.name, "everyMinutes": args.every}, ensure_ascii=False))
-
-
-def remove_schedule(name: str) -> None:
-    slug = task_slug(name)
-    if platform.system() == "Windows":
-        for task_name in [f"AppleStockMonitor-{slug}", f"AppleStockWatchdog-{slug}"]:
-            subprocess.run(["schtasks", "/Delete", "/TN", task_name, "/F"], capture_output=True)
-    else:
-        marker = f"apple-stock-monitor:{slug}"
-        existing = subprocess.run(["crontab", "-l"], capture_output=True, text=True).stdout.splitlines()
-        kept = [line for line in existing if marker not in line]
-        subprocess.run(["crontab", "-"], input="\n".join(kept) + "\n", text=True, check=True)
-    for path in monitor_home().glob(f"*{slug}*"):
-        if path.is_file() and path.name.startswith(("run-", "watchdog-", "job-")):
-            path.unlink()
-    print(json.dumps({"removed": name}, ensure_ascii=False))
+        bark_push("Apple 库存任务心跳超时", f"已经 {int(age // 60)} 分钟没有成功查询，请检查 Agent 定时任务、网络和脚本。", notification_id="apple-stock-watchdog")
 
 
 def show_status() -> None:
     home = monitor_home()
-    jobs = [read_json(path, {}) for path in home.glob("job-*.json")]
-    value = {"home": str(home), "configured": bool(load_config().get("barkUrl") or os.environ.get("APPLE_STOCK_BARK_URL")), "state": read_json(home / "state.json", {}), "jobs": jobs}
+    value = {"home": str(home), "configured": bool(load_config().get("barkUrl") or os.environ.get("APPLE_STOCK_BARK_URL")), "state": read_json(home / "state.json", {})}
     print(json.dumps(value, ensure_ascii=False, indent=2))
 
 
@@ -665,14 +588,6 @@ def build_parser() -> argparse.ArgumentParser:
     watch = commands.add_parser("watchdog")
     watch.add_argument("--max-age", type=int, default=5)
     commands.add_parser("status")
-    schedule = commands.add_parser("schedule")
-    schedule_commands = schedule.add_subparsers(dest="schedule_command", required=True)
-    create = schedule_commands.add_parser("create")
-    create.add_argument("--name", required=True)
-    create.add_argument("--every", type=int, default=1)
-    add_monitor_filters(create)
-    remove = schedule_commands.add_parser("remove")
-    remove.add_argument("--name", required=True)
     return parser
 
 
@@ -691,10 +606,6 @@ def main(argv: list[str] | None = None) -> int:
             watchdog(args.max_age)
         elif args.command == "status":
             show_status()
-        elif args.command == "schedule" and args.schedule_command == "create":
-            install_schedule(args)
-        elif args.command == "schedule" and args.schedule_command == "remove":
-            remove_schedule(args.name)
         return 0
     except MonitorError as exc:
         if args.command == "check":

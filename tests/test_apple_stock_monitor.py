@@ -98,14 +98,6 @@ class AppleStockMonitorTest(unittest.TestCase):
         self.assertEqual(result[0]["quote"], "今天可取货")
         self.assertEqual(monitor.classify_part(None), "unknown")
 
-    def test_china_schedule_rejects_aggressive_interval(self):
-        args = monitor.build_parser().parse_args([
-            "schedule", "create", "--name", "china", "--every", "1",
-            "--scope", "china", "--model", "iPhone 18 Pro Max"
-        ])
-        with self.assertRaisesRegex(monitor.MonitorError, "不得小于 3"):
-            monitor.install_schedule(args)
-
     def test_available_alert_uses_thirty_minute_cooldown_across_jobs(self):
         pushes = []
         original_home = monitor.monitor_home

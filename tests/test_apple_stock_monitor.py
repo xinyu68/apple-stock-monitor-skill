@@ -1,4 +1,5 @@
 import importlib.util
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -34,6 +35,42 @@ class AppleStockMonitorTest(unittest.TestCase):
         self.assertEqual(product["color"], "银色")
         self.assertEqual(product["partNumber"], "MJT84CH/A")
 
+    def test_keeps_iphone_17_and_17e_as_distinct_models(self):
+        base = monitor.normalize_products("iphone-17", {
+            "products": [{"partNumber": "BASE", "familyType": "iphone17"}],
+            "displayValues": {}
+        })[0]
+        compact = monitor.normalize_products("iphone-17e", {
+            "products": [{"partNumber": "E", "familyType": "iphone17e"}],
+            "displayValues": {}
+        })[0]
+        self.assertEqual(base["model"], "iPhone 17")
+        self.assertEqual(compact["model"], "iPhone 17e")
+
+        original = monitor.load_catalog
+        monitor.load_catalog = lambda force=False: [base, compact]
+        try:
+            matches = monitor.resolve_products("iPhone 17", None, None)
+        finally:
+            monitor.load_catalog = original
+        self.assertEqual([item["partNumber"] for item in matches], ["BASE"])
+
+    def test_old_catalog_schema_is_refreshed(self):
+        original_home = monitor.monitor_home
+        original_refresh = monitor.refresh_catalog
+        with tempfile.TemporaryDirectory() as directory:
+            monitor.monitor_home = lambda: Path(directory)
+            monitor.write_json(Path(directory) / "catalog.json", {
+                "products": [{"partNumber": "STALE"}]
+            })
+            monitor.refresh_catalog = lambda: [{"partNumber": "FRESH"}]
+            try:
+                products = monitor.load_catalog()
+            finally:
+                monitor.monitor_home = original_home
+                monitor.refresh_catalog = original_refresh
+        self.assertEqual(products, [{"partNumber": "FRESH"}])
+
     def test_removes_apple_footnote_markers(self):
         self.assertEqual(monitor.clean_html("256 GB 脚注 1"), "256 GB")
 
@@ -68,6 +105,48 @@ class AppleStockMonitorTest(unittest.TestCase):
         ])
         with self.assertRaisesRegex(monitor.MonitorError, "不得小于 3"):
             monitor.install_schedule(args)
+
+    def test_available_alert_uses_thirty_minute_cooldown_across_jobs(self):
+        pushes = []
+        original_home = monitor.monitor_home
+        original_push = monitor.bark_push
+        original_time = monitor.time.time
+        with tempfile.TemporaryDirectory() as directory:
+            now = [1000.0]
+            monitor.monitor_home = lambda: Path(directory)
+            monitor.bark_push = lambda *args, **kwargs: pushes.append((args, kwargs))
+            monitor.time.time = lambda: now[0]
+            try:
+                first = {
+                    "storeNumber": "R1", "storeName": "门店一", "city": "北京",
+                    "partNumber": "A", "product": "iPhone A", "status": "available",
+                    "quote": "今天可取货", "buyUrl": "https://apple.example/a"
+                }
+                second = {
+                    "storeNumber": "R2", "storeName": "门店二", "city": "上海",
+                    "partNumber": "B", "product": "iPhone B", "status": "available",
+                    "quote": "今天可取货", "buyUrl": "https://apple.example/b"
+                }
+                monitor.record_success([first])
+                monitor.record_success([second])
+                monitor.record_success([first])
+                self.assertEqual(len(pushes), 2)
+
+                now[0] = 2799.0
+                monitor.record_success([first])
+                self.assertEqual(len(pushes), 2)
+
+                now[0] = 2800.0
+                monitor.record_success([first])
+                self.assertEqual(len(pushes), 3)
+
+                monitor.record_success([{**first, "status": "unavailable"}])
+                monitor.record_success([first])
+                self.assertEqual(len(pushes), 4)
+            finally:
+                monitor.monitor_home = original_home
+                monitor.bark_push = original_push
+                monitor.time.time = original_time
 
 
 if __name__ == "__main__":

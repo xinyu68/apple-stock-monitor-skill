@@ -19,11 +19,12 @@ On Windows, prefer `py -3` when `python` is unavailable. Before creating a recur
 
 ## Workflow
 
-1. Translate the user's request into `--model`, `--capacity`, `--color`, and either `--city` or `--scope china`.
-2. If Bark is not configured, ask only for the user's full Bark URL or key, then run `configure --bark-url ... --test`. Never echo or commit the secret.
-3. Run `check` once. Report the exact Apple part numbers and stores found. Treat `unknown` or command failure as an error, never as out of stock.
-4. When the user explicitly asks to start monitoring, run `schedule create` with the same filters. Update the named job instead of creating a duplicate.
-5. Use `status` to verify the last successful check and task heartbeat.
+1. At the beginning of the first use after installation, run `status`. If `configured` is false, proactively tell the user that Bark is not configured and ask only for their full Bark URL or key. Never echo or commit the secret. A one-time stock query may continue while waiting for it, but do not create a recurring job until `configure --bark-url ... --test` succeeds.
+2. Translate the user's request into an exact `--model`, `--capacity`, `--color`, and either `--city` or `--scope china`. Do not silently broaden `iPhone 17` to `iPhone 17e`, Pro, Pro Max, Plus, Air, or another family.
+3. Run `check` once. Report every matched Apple part number and store. For broad queries, a compact summary is acceptable only if the complete part-number mapping remains visible. Treat `unknown` or command failure as an error, never as out of stock.
+4. Group multi-store results by store. When using a Markdown table, emit a valid header cell for each column and do not omit variants returned by the script.
+5. When the user explicitly asks to start monitoring, run `schedule create` with the same filters. Update the named job instead of creating a duplicate.
+6. Use `status` to verify the last successful check and task heartbeat.
 
 ## Examples
 
@@ -35,7 +36,7 @@ python scripts/apple_stock_monitor.py check --scope china --model "iPhone 18 Pro
 python scripts/apple_stock_monitor.py status
 ```
 
-Use at least a three-minute interval for `--scope china`; one minute is acceptable for one city and a small SKU set. The script adds jitter and sends Bark only on state transitions.
+Use at least a three-minute interval for `--scope china`; one minute is acceptable for one city and a small SKU set. The script adds jitter. For each store and part number, Bark sends an arrival alert when availability first becomes `available`, then sends at most one reminder every 30 minutes while it remains available. If it leaves `available` and later returns, alert immediately without waiting for the cooldown. Different monitor jobs must not reset each other's notification state.
 
 ## Failure handling
 

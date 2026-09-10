@@ -27,6 +27,8 @@ BASE_URL = "https://www.apple.com.cn"
 PICKUP_ENDPOINT = f"{BASE_URL}/shop/retail/pickup-message"
 BUY_ROOT = f"{BASE_URL}/shop/buy-iphone"
 DEFAULT_HOME = Path.home() / ".apple-stock-monitor"
+CATALOG_SCHEMA_VERSION = 2
+AVAILABLE_REMINDER_INTERVAL_SECONDS = 30 * 60
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152 Safari/537.36"
@@ -200,9 +202,13 @@ def display_value(data: dict[str, Any], dimension: str, key: Any) -> str:
 
 def family_title(product: dict[str, Any], family: str) -> str:
     raw = str(product.get("familyType") or family).lower().replace("-", "").replace("_", "")
-    match = re.search(r"iphone(\d+)(pro)?(max)?", raw)
+    match = re.fullmatch(r"iphone(\d+)(e|pro(?:max)?|plus|mini)?", raw)
     if match:
-        return f"iPhone {match.group(1)}{' Pro' if match.group(2) else ''}{' Max' if match.group(3) else ''}"
+        suffix = {
+            None: "", "e": "e", "pro": " Pro", "promax": " Pro Max",
+            "plus": " Plus", "mini": " mini"
+        }[match.group(2)]
+        return f"iPhone {match.group(1)}{suffix}"
     words = {"iphone": "iPhone", "pro": "Pro", "max": "Max", "air": "Air", "mini": "mini"}
     return " ".join(words.get(word, word.title()) for word in family.split("-"))
 
@@ -258,7 +264,10 @@ def refresh_catalog() -> list[dict[str, Any]]:
     if not products:
         raise MonitorError("Apple 购买页全部解析失败: " + "; ".join(failures))
     unique = {product["partNumber"]: product for product in products}
-    catalog = {"updatedAt": utc_now(), "products": list(unique.values()), "failures": failures}
+    catalog = {
+        "schemaVersion": CATALOG_SCHEMA_VERSION,
+        "updatedAt": utc_now(), "products": list(unique.values()), "failures": failures
+    }
     write_json(monitor_home() / "catalog.json", catalog)
     return catalog["products"]
 
@@ -267,7 +276,7 @@ def load_catalog(force: bool = False) -> list[dict[str, Any]]:
     path = monitor_home() / "catalog.json"
     if not force and path.exists() and time.time() - path.stat().st_mtime < 12 * 3600:
         cached = read_json(path, {})
-        if cached.get("products"):
+        if cached.get("schemaVersion") == CATALOG_SCHEMA_VERSION and cached.get("products"):
             return cached["products"]
     return refresh_catalog()
 
@@ -293,9 +302,7 @@ def resolve_products(model: str, capacity: str | None, color: str | None,
     matches = []
     for product in load_catalog(force=refresh):
         product_model = compact(product.get("model", ""))
-        if wanted_model not in product_model:
-            continue
-        if wanted_model.endswith("pro") and product_model.endswith("promax"):
+        if wanted_model != product_model:
             continue
         if wanted_capacity and normalize_capacity(product.get("capacity", "")) != wanted_capacity:
             continue
@@ -417,11 +424,33 @@ def record_success(results: list[dict[str, Any]]) -> None:
     path = monitor_home() / "state.json"
     state = read_json(path, {})
     was_failing = int(state.get("consecutiveFailures", 0)) >= 3
-    statuses = {f"{item['storeNumber']}:{item['partNumber']}": item["status"] for item in results}
-    notified = state.get("notifiedAvailable", {})
-    newly_available = [item for item in results if item["status"] == "available" and not notified.get(f"{item['storeNumber']}:{item['partNumber']}")]
-    current_available = {key for key, status in statuses.items() if status == "available"}
-    notified = {key: value for key, value in notified.items() if key in current_available}
+    statuses = dict(state.get("statuses", {}))
+    observed = {f"{item['storeNumber']}:{item['partNumber']}": item["status"] for item in results}
+    statuses.update(observed)
+    notified = dict(state.get("notifiedAvailable", {}))
+    now = time.time()
+    for key, value in list(notified.items()):
+        if value is True:
+            notified[key] = now
+        elif value is False:
+            notified.pop(key, None)
+    newly_available = []
+    for item in results:
+        if item["status"] != "available":
+            continue
+        key = f"{item['storeNumber']}:{item['partNumber']}"
+        if key not in notified:
+            newly_available.append(item)
+            continue
+        try:
+            last_push = float(notified[key])
+        except (TypeError, ValueError):
+            last_push = 0
+        if now - last_push >= AVAILABLE_REMINDER_INTERVAL_SECONDS:
+            newly_available.append(item)
+    for key, status in observed.items():
+        if status != "available":
+            notified.pop(key, None)
     state.update({
         "lastAttempt": utc_now(), "lastSuccess": utc_now(), "lastError": None,
         "consecutiveFailures": 0, "statuses": statuses, "resultCount": len(results),
@@ -437,8 +466,8 @@ def record_success(results: list[dict[str, Any]]) -> None:
         body = f"{item['city']} · {item['storeName']}\n{item['product']}\n{item['quote'] or '现在可取货'}"
         key = f"{item['storeNumber']}:{item['partNumber']}"
         try:
-            bark_push("Apple 到货提醒", body, item["buyUrl"], f"apple-stock-{item['storeNumber']}-{item['partNumber']}")
-            state["notifiedAvailable"][key] = True
+            bark_push("Apple 到货提醒", body, item["buyUrl"])
+            state["notifiedAvailable"][key] = now
         except MonitorError as exc:
             state["lastBarkError"] = str(exc)
     write_json(path, state)

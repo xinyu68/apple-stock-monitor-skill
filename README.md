@@ -8,7 +8,6 @@
 
 ```text
 请安装这个 skill：https://github.com/xinyu68/apple-stock-monitor-skill/tree/main/apple-stock-monitor
-安装完成后请立即询问我的 Bark Key 或完整 Bark URL，以便完成首次配置和测试推送；即使新 Skill 要到下一轮才生效，也要在安装结果中主动询问。
 ```
 
 ## 更新 Skill

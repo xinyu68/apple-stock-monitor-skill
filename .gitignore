@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.test-runtime/
+.apple-stock-monitor/
+config.json
+state.json
+catalog.json
+*.log

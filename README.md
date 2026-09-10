@@ -1,6 +1,6 @@
 # Apple Stock Monitor Skill
 
-面向 Hermes Agent、Codex 等 Agent 的 Apple 官方到店取货库存监控 Skill。无需桌面界面，通过自然语言配置地区、城市、型号、容量和颜色；有货、持续异常及恢复时通过 Bark 推送。
+面向 Hermes Agent、Codex 等 Agent 的 Apple 官方到店取货库存监控 Skill。无需桌面界面，通过自然语言配置地区、城市、门店、型号、容量和颜色；有货、持续异常及恢复时通过 Bark 推送。
 
 ## 一句话安装
 
@@ -29,6 +29,7 @@ https://github.com/xinyu68/apple-stock-monitor-skill/tree/main/apple-stock-monit
 ```text
 配置 Bark 地址 https://api.day.app/你的Key，并测试推送。
 监控北京所有门店 iPhone 18 Pro Max 银色 256 GB 的库存，每分钟检查一次。
+监控北京三里屯 iPhone 17 白色 256 GB 的库存，每分钟检查一次。
 查看 Apple 库存监控状态。
 停止 beijing-18-pro-max 监控任务。
 ```

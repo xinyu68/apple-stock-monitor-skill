@@ -98,6 +98,34 @@ class AppleStockMonitorTest(unittest.TestCase):
         self.assertEqual(result[0]["quote"], "今天可取货")
         self.assertEqual(monitor.classify_part(None), "unknown")
 
+    def test_filters_results_by_exact_store_name_or_number(self):
+        products = [{"partNumber": "A", "title": "Phone A", "buyUrl": "https://apple.example/buy"}]
+        stores = [
+            {
+                "storeNumber": "R320", "storeName": "三里屯", "city": "北京",
+                "partsAvailability": {"A": {"pickupDisplay": "available"}}
+            },
+            {
+                "storeNumber": "R448", "storeName": "王府井", "city": "北京",
+                "partsAvailability": {"A": {"pickupDisplay": "available"}}
+            }
+        ]
+
+        by_name = monitor.parse_results(stores, products, "北京", "Apple 三里屯")
+        by_number = monitor.parse_results(stores, products, "北京", "r448")
+
+        self.assertEqual([item["storeNumber"] for item in by_name], ["R320"])
+        self.assertEqual([item["storeNumber"] for item in by_number], ["R448"])
+
+    def test_store_filter_does_not_fuzzily_match_multiple_stores(self):
+        products = [{"partNumber": "A", "title": "Phone A", "buyUrl": "https://apple.example/buy"}]
+        stores = [
+            {"storeNumber": "R1", "storeName": "西单大悦城", "city": "北京", "partsAvailability": {}},
+            {"storeNumber": "R2", "storeName": "朝阳大悦城", "city": "北京", "partsAvailability": {}}
+        ]
+
+        self.assertEqual(monitor.parse_results(stores, products, "北京", "大悦城"), [])
+
     def test_available_alert_uses_thirty_minute_cooldown_across_jobs(self):
         pushes = []
         original_home = monitor.monitor_home

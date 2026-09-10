@@ -340,11 +340,21 @@ def classify_part(info: dict[str, Any] | None) -> str:
 
 
 def parse_results(stores: list[dict[str, Any]], products: list[dict[str, Any]],
-                  city: str | None) -> list[dict[str, Any]]:
+                  city: str | None, store_filter: str | None = None) -> list[dict[str, Any]]:
     results = []
+    normalized_store_filter = compact(store_filter or "")
+    if normalized_store_filter.startswith("apple"):
+        normalized_store_filter = normalized_store_filter[len("apple"):]
     for store in stores:
         store_city = clean_html(store.get("city"))
         if city and compact(city) not in compact(store_city):
+            continue
+        store_name = clean_html(store.get("storeName"))
+        store_number = str(store.get("storeNumber") or "")
+        normalized_store_name = compact(store_name)
+        if normalized_store_name.startswith("apple"):
+            normalized_store_name = normalized_store_name[len("apple"):]
+        if store_filter and normalized_store_filter not in {normalized_store_name, compact(store_number)}:
             continue
         availability = store.get("partsAvailability", {})
         for product in products:
@@ -356,7 +366,7 @@ def parse_results(stores: list[dict[str, Any]], products: list[dict[str, Any]],
             regular = info.get("messageTypes", {}).get("regular", {}) if isinstance(info, dict) else {}
             results.append({
                 "storeNumber": store.get("storeNumber"),
-                "storeName": store.get("storeName"),
+                "storeName": store_name,
                 "city": store_city,
                 "partNumber": part,
                 "product": product["title"],
@@ -526,9 +536,10 @@ def run_check(args: argparse.Namespace) -> list[dict[str, Any]]:
             time.sleep(0.4)
     if not all_stores:
         raise MonitorError("所有库存查询均失败: " + "; ".join(errors))
-    results = parse_results(list(all_stores.values()), products, args.city)
+    results = parse_results(list(all_stores.values()), products, args.city, args.store)
     if not results:
-        raise MonitorError(f"Apple 返回了门店，但没有匹配到 {args.city or '中国大陆'} 的监控结果")
+        location = args.store or args.city or "中国大陆"
+        raise MonitorError(f"Apple 返回了门店，但没有匹配到 {location} 的监控结果")
     unknown_count = sum(item["status"] == "unknown" for item in results)
     if unknown_count == len(results):
         raise MonitorError("所有商品状态均为 unknown，商品代码或响应结构可能已经变化")
@@ -569,6 +580,7 @@ def show_status() -> None:
 def add_monitor_filters(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--city")
     parser.add_argument("--scope", choices=["china"])
+    parser.add_argument("--store")
     parser.add_argument("--model", required=True)
     parser.add_argument("--capacity")
     parser.add_argument("--color")

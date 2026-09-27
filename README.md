@@ -36,6 +36,8 @@ https://github.com/xinyu68/apple-stock-monitor-skill/tree/main/apple-stock-monit
 
 脚本仅使用 Python 标准库。配置默认保存在用户目录的 `.apple-stock-monitor` 中，Bark Key 不会写入仓库。周期运行由 Codex、Hermes 等 Agent 自带的定时任务功能负责，不创建 Windows 任务计划或系统 crontab。
 
+Bark 本身不要求代理；是否需要代理取决于运行监控的设备和网络。推送失败时应在该设备上分别检查直连与实际生效的系统或进程代理，不能仅凭浏览器能收到通知就认定脚本可直连。
+
 同一门店、同一料号持续有货时最多每 30 分钟推送一次；如果库存先变为无货或不可自提，之后再次有货，则立即推送，不等待冷却时间。多个监控任务的提醒状态彼此不会互相清除。
 
 ## 边界

@@ -392,9 +392,17 @@ def bark_push(title: str, body: str, url: str | None = None, notification_id: st
         payload["url"] = url
     if notification_id:
         payload["id"] = notification_id
-    response = request_json(bark_url, payload=payload)
-    if int(response.get("code", 200)) != 200:
-        raise MonitorError(f"Bark 推送失败: {response.get('message') or response.get('code')}")
+    try:
+        response = request_json(bark_url, payload=payload)
+    except Exception as exc:
+        # 网络异常可能包含带 Key 的 URL，不能将其写入日志或状态文件
+        key_path = urllib.parse.urlsplit(bark_url).path.strip("/")
+        detail = str(exc).replace(bark_url, "[Bark URL]")
+        if key_path:
+            detail = detail.replace(key_path, "[Bark Key]")
+        raise MonitorError(f"Bark 请求失败: {detail}") from None
+    if str(response.get("code")) != "200":
+        raise MonitorError("Bark 推送失败：服务端未返回成功码")
 
 
 def save_config(bark_url: str, test: bool) -> None:

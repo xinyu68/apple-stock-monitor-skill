@@ -42,4 +42,6 @@ Use at least a three-minute interval for `--scope china`; one minute is acceptab
 
 The script distinguishes `available`, `unavailable`, `ineligible`, and `unknown`. It sends a deduplicated Bark alert after repeated query failures and a recovery alert after service returns. Configure the Agent automation to report its own failed runs, because a script that never starts cannot send Bark.
 
+Bark itself does not require a proxy. If a push fails, test connectivity from the machine running the monitor and distinguish direct access from the effective system or process proxy. A successful browser request alone does not establish that the monitor has a working direct route. Never print the Bark URL or Key while diagnosing.
+
 For Apple endpoint changes, product-code changes, missing stores, HTTP 541, schema errors, or repair work, read [references/maintenance.md](references/maintenance.md). For scheduler behavior and host limitations, read [references/scheduling.md](references/scheduling.md).

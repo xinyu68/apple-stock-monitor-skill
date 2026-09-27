@@ -2,6 +2,7 @@ import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).parents[1] / "apple-stock-monitor" / "scripts" / "apple_stock_monitor.py"
@@ -167,6 +168,24 @@ class AppleStockMonitorTest(unittest.TestCase):
                 monitor.monitor_home = original_home
                 monitor.bark_push = original_push
                 monitor.time.time = original_time
+
+    def test_bark_push_requires_success_code(self):
+        with patch.object(monitor, "load_config", return_value={"barkUrl": "https://api.day.app/test-secret"}):
+            with patch.object(monitor, "request_json", return_value={"code": 200}) as request:
+                monitor.bark_push("库存提醒", "测试")
+            self.assertEqual(request.call_args.kwargs["payload"]["title"], "库存提醒")
+            for response in ({}, {"code": 400}):
+                with patch.object(monitor, "request_json", return_value=response):
+                    with self.assertRaisesRegex(monitor.MonitorError, "未返回成功码"):
+                        monitor.bark_push("库存提醒", "测试")
+
+    def test_bark_network_error_redacts_key(self):
+        secret = "test-secret"
+        with patch.object(monitor, "load_config", return_value={"barkUrl": f"https://api.day.app/{secret}"}):
+            with patch.object(monitor, "request_json", side_effect=OSError(f"https://api.day.app/{secret} failed")):
+                with self.assertRaises(monitor.MonitorError) as error:
+                    monitor.bark_push("库存提醒", "测试")
+        self.assertNotIn(secret, str(error.exception))
 
 
 if __name__ == "__main__":

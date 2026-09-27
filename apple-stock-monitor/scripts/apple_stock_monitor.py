@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import html
 import json
 import os
@@ -80,7 +81,8 @@ def write_json(path: Path, value: Any) -> None:
 
 
 def curl_request(url: str, payload: dict[str, Any] | None, timeout: int,
-                 original_error: Exception | None = None) -> bytes:
+                 original_error: Exception | None = None, *, proxy_mode: str = "inherit",
+                 proxy_address: str = "") -> bytes:
     curl = shutil.which("curl")
     if not curl:
         raise MonitorError(f"系统没有 curl，原始网络错误: {original_error}") from original_error
@@ -91,6 +93,10 @@ def curl_request(url: str, payload: dict[str, Any] | None, timeout: int,
         "-H", "Accept-Language: zh-CN,zh;q=0.9,en;q=0.7",
         "-H", "X-Requested-With: XMLHttpRequest"
     ]
+    if proxy_mode == "direct":
+        command += ["--proxy", "", "--noproxy", "*"]
+    elif proxy_mode == "proxy":
+        command += ["--proxy", proxy_address, "--noproxy", ""]
     input_data = None
     if payload is not None:
         input_data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -106,7 +112,9 @@ def curl_request(url: str, payload: dict[str, Any] | None, timeout: int,
 
 
 def request(url: str, *, params: dict[str, Any] | list[tuple[str, Any]] | None = None,
-            payload: dict[str, Any] | None = None, timeout: int = 35) -> bytes:
+            payload: dict[str, Any] | None = None, timeout: int = 35,
+            proxy_mode: str = "inherit", proxy_address: str = "",
+            retry_with_curl: bool = True) -> bytes:
     if params:
         query = urllib.parse.urlencode(params)
         url = f"{url}{'&' if '?' in url else '?'}{query}"
@@ -121,19 +129,38 @@ def request(url: str, *, params: dict[str, Any] | list[tuple[str, Any]] | None =
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json; charset=utf-8"
     if platform.system() == "Windows" and shutil.which("curl"):
-        return curl_request(url, payload, timeout)
+        return curl_request(url, payload, timeout, proxy_mode=proxy_mode, proxy_address=proxy_address)
+    request_obj = urllib.request.Request(url, data=data, headers=headers)
+    if proxy_mode == "inherit":
+        open_request = urllib.request.urlopen
+    else:
+        if proxy_mode == "proxy":
+            parsed_proxy = urllib.parse.urlsplit(proxy_address)
+            proxy_host = parsed_proxy.hostname
+            if ":" in proxy_host:
+                proxy_host = f"[{proxy_host}]"
+            if parsed_proxy.port:
+                proxy_host += f":{parsed_proxy.port}"
+            if parsed_proxy.username is not None:
+                credentials = (f"{urllib.parse.unquote(parsed_proxy.username)}:"
+                               f"{urllib.parse.unquote(parsed_proxy.password or '')}")
+                encoded = base64.b64encode(credentials.encode("utf-8")).decode("ascii")
+                request_obj.add_header("Proxy-Authorization", f"Basic {encoded}")
+            request_obj.set_proxy(proxy_host, parsed_proxy.scheme)
+        open_request = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, data=data, headers=headers), timeout=timeout) as response:
+        with open_request(request_obj, timeout=timeout) as response:
             body = response.read(4 * 1024 * 1024 + 1)
             if len(body) > 4 * 1024 * 1024:
                 raise MonitorError("远端响应超过 4 MiB 安全上限")
             return body
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as first_error:
-        if not shutil.which("curl"):
+        if not retry_with_curl or not shutil.which("curl"):
             if isinstance(first_error, urllib.error.HTTPError):
                 raise MonitorError(f"HTTP {first_error.code}: {urllib.parse.urlsplit(url).path}") from first_error
             raise MonitorError(f"网络请求失败: {first_error}") from first_error
-        return curl_request(url, payload, timeout, first_error)
+        return curl_request(url, payload, timeout, first_error,
+                            proxy_mode=proxy_mode, proxy_address=proxy_address)
 
 
 def request_text(url: str) -> str:
@@ -141,8 +168,10 @@ def request_text(url: str) -> str:
 
 
 def request_json(url: str, *, params: dict[str, Any] | list[tuple[str, Any]] | None = None,
-                 payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    raw = request(url, params=params, payload=payload)
+                 payload: dict[str, Any] | None = None, proxy_mode: str = "inherit",
+                 proxy_address: str = "", retry_with_curl: bool = True) -> dict[str, Any]:
+    raw = request(url, params=params, payload=payload, proxy_mode=proxy_mode,
+                  proxy_address=proxy_address, retry_with_curl=retry_with_curl)
     try:
         value = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -381,23 +410,44 @@ def load_config() -> dict[str, Any]:
     return read_json(monitor_home() / "config.json", {})
 
 
+def validate_bark_network(mode: str, address: str) -> None:
+    if mode not in ("inherit", "direct", "proxy"):
+        raise MonitorError("Bark 代理模式必须是 inherit、direct 或 proxy")
+    if mode == "proxy":
+        try:
+            parsed = urllib.parse.urlsplit(address)
+            valid_proxy = parsed.scheme == "http" and bool(parsed.hostname)
+            parsed.port
+        except ValueError:
+            valid_proxy = False
+        if not valid_proxy:
+            raise MonitorError("proxy 模式需要有效的 HTTP 代理地址")
+
+
 def bark_push(title: str, body: str, url: str | None = None, notification_id: str | None = None) -> None:
-    bark_url = load_config().get("barkUrl") or os.environ.get("APPLE_STOCK_BARK_URL")
+    config = load_config()
+    bark_url = config.get("barkUrl") or os.environ.get("APPLE_STOCK_BARK_URL")
     if not bark_url:
         raise MonitorError("尚未配置 Bark URL")
     if not bark_url.startswith(("https://", "http://")):
         bark_url = f"https://api.day.app/{bark_url.strip('/')}"
+    proxy_mode = config.get("barkProxyMode", "inherit")
+    proxy_address = config.get("barkProxyAddress", "")
+    validate_bark_network(proxy_mode, proxy_address)
     payload: dict[str, Any] = {"title": title, "body": body, "group": "Apple库存", "level": "timeSensitive"}
     if url:
         payload["url"] = url
     if notification_id:
         payload["id"] = notification_id
     try:
-        response = request_json(bark_url, payload=payload)
+        response = request_json(bark_url, payload=payload, proxy_mode=proxy_mode,
+                                proxy_address=proxy_address, retry_with_curl=False)
     except Exception as exc:
         # 网络异常可能包含带 Key 的 URL，不能将其写入日志或状态文件
         key_path = urllib.parse.urlsplit(bark_url).path.strip("/")
         detail = str(exc).replace(bark_url, "[Bark URL]")
+        if proxy_address:
+            detail = detail.replace(proxy_address, "[Proxy URL]")
         if key_path:
             detail = detail.replace(key_path, "[Bark Key]")
         raise MonitorError(f"Bark 请求失败: {detail}") from None
@@ -412,11 +462,28 @@ def save_config(bark_url: str, test: bool) -> None:
     if not parsed.netloc or len(parsed.path.strip("/")) < 4:
         raise MonitorError("Bark URL 或 Key 格式无效")
     config_path = monitor_home() / "config.json"
-    write_json(config_path, {"barkUrl": bark_url, "updatedAt": utc_now()})
+    config = load_config()
+    config.update({"barkUrl": bark_url, "updatedAt": utc_now()})
+    write_json(config_path, config)
     if platform.system() != "Windows":
         config_path.chmod(0o600)
     if test:
         bark_push("Apple 库存监控", "Bark 配置成功，后续有货或任务异常会在这里提醒。")
+
+
+def save_bark_network(mode: str, address: str | None = None) -> dict[str, Any]:
+    config = load_config()
+    if address is not None:
+        config["barkProxyAddress"] = address
+    proxy_address = config.get("barkProxyAddress", "")
+    validate_bark_network(mode, proxy_address)
+    config["barkProxyMode"] = mode
+    config["updatedAt"] = utc_now()
+    config_path = monitor_home() / "config.json"
+    write_json(config_path, config)
+    if platform.system() != "Windows":
+        config_path.chmod(0o600)
+    return {"mode": mode, "proxyConfigured": bool(proxy_address)}
 
 
 def record_failure(message: str) -> None:
@@ -581,7 +648,12 @@ def watchdog(max_age_minutes: int) -> None:
 
 def show_status() -> None:
     home = monitor_home()
-    value = {"home": str(home), "configured": bool(load_config().get("barkUrl") or os.environ.get("APPLE_STOCK_BARK_URL")), "state": read_json(home / "state.json", {})}
+    config = load_config()
+    value = {"home": str(home),
+             "configured": bool(config.get("barkUrl") or os.environ.get("APPLE_STOCK_BARK_URL")),
+             "barkProxyMode": config.get("barkProxyMode", "inherit"),
+             "barkProxyConfigured": bool(config.get("barkProxyAddress")),
+             "state": read_json(home / "state.json", {})}
     print(json.dumps(value, ensure_ascii=False, indent=2))
 
 
@@ -600,6 +672,9 @@ def build_parser() -> argparse.ArgumentParser:
     configure = commands.add_parser("configure")
     configure.add_argument("--bark-url", required=True)
     configure.add_argument("--test", action="store_true")
+    network = commands.add_parser("bark-network")
+    network.add_argument("--mode", choices=["inherit", "direct", "proxy"], required=True)
+    network.add_argument("--proxy-url")
     refresh = commands.add_parser("catalog-refresh")
     refresh.set_defaults(refresh_catalog=True)
     check = commands.add_parser("check")
@@ -617,6 +692,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "configure":
             save_config(args.bark_url, args.test)
             print(json.dumps({"configured": True, "tested": args.test}, ensure_ascii=False))
+        elif args.command == "bark-network":
+            print(json.dumps(save_bark_network(args.mode, args.proxy_url), ensure_ascii=False))
         elif args.command == "catalog-refresh":
             products = refresh_catalog()
             print(json.dumps({"products": len(products), "updatedAt": utc_now()}, ensure_ascii=False))

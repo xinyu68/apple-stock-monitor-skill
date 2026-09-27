@@ -1,8 +1,9 @@
 import importlib.util
+import io
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 SCRIPT = Path(__file__).parents[1] / "apple-stock-monitor" / "scripts" / "apple_stock_monitor.py"
@@ -174,6 +175,8 @@ class AppleStockMonitorTest(unittest.TestCase):
             with patch.object(monitor, "request_json", return_value={"code": 200}) as request:
                 monitor.bark_push("库存提醒", "测试")
             self.assertEqual(request.call_args.kwargs["payload"]["title"], "库存提醒")
+            self.assertEqual(request.call_args.kwargs["proxy_mode"], "inherit")
+            self.assertFalse(request.call_args.kwargs["retry_with_curl"])
             for response in ({}, {"code": 400}):
                 with patch.object(monitor, "request_json", return_value=response):
                     with self.assertRaisesRegex(monitor.MonitorError, "未返回成功码"):
@@ -186,6 +189,89 @@ class AppleStockMonitorTest(unittest.TestCase):
                 with self.assertRaises(monitor.MonitorError) as error:
                     monitor.bark_push("库存提醒", "测试")
         self.assertNotIn(secret, str(error.exception))
+
+    def test_bark_push_uses_saved_proxy_mode(self):
+        config = {"barkUrl": "https://api.day.app/test-secret",
+                  "barkProxyMode": "proxy", "barkProxyAddress": "http://127.0.0.1:7897"}
+        with patch.object(monitor, "load_config", return_value=config):
+            with patch.object(monitor, "request_json", return_value={"code": 200}) as request:
+                monitor.bark_push("库存提醒", "测试")
+        self.assertEqual(request.call_args.kwargs["proxy_mode"], "proxy")
+        self.assertEqual(request.call_args.kwargs["proxy_address"], config["barkProxyAddress"])
+
+    def test_bark_network_modes_control_curl(self):
+        for mode, expected in (
+            ("inherit", None),
+            ("direct", ["--proxy", "", "--noproxy", "*"]),
+            ("proxy", ["--proxy", "http://127.0.0.1:7897", "--noproxy", ""]),
+        ):
+            completed = Mock(returncode=0, stdout=b"{}", stderr=b"")
+            with self.subTest(mode=mode):
+                with patch.object(monitor.shutil, "which", return_value="curl"):
+                    with patch.object(monitor.subprocess, "run", return_value=completed) as run:
+                        monitor.curl_request("https://api.day.app/test-secret", None, 10,
+                                             proxy_mode=mode, proxy_address="http://127.0.0.1:7897")
+                command = run.call_args.args[0]
+                if expected is None:
+                    self.assertNotIn("--proxy", command)
+                else:
+                    self.assertEqual(command[command.index("--proxy"):command.index("--proxy") + 4], expected)
+
+    def test_direct_mode_uses_empty_urllib_proxy_handler(self):
+        opener = Mock()
+        opener.open.return_value = io.BytesIO(b"ok")
+        with patch.object(monitor.platform, "system", return_value="Linux"):
+            with patch.object(monitor.urllib.request, "build_opener", return_value=opener) as build:
+                self.assertEqual(monitor.request("https://example.com", proxy_mode="direct"), b"ok")
+        self.assertEqual(build.call_args.args[0].proxies, {})
+
+    def test_explicit_urllib_proxy_overrides_no_proxy(self):
+        opener = Mock()
+        opener.open.return_value = io.BytesIO(b"ok")
+        with patch.object(monitor.platform, "system", return_value="Linux"):
+            with patch.dict(monitor.os.environ, {"NO_PROXY": "api.day.app"}):
+                with patch.object(monitor.urllib.request, "build_opener", return_value=opener) as build:
+                    self.assertEqual(monitor.request("https://api.day.app/", proxy_mode="proxy",
+                                                     proxy_address="http://127.0.0.1:7897"), b"ok")
+        self.assertEqual(build.call_args.args[0].proxies, {})
+        self.assertEqual(opener.open.call_args.args[0].host, "127.0.0.1:7897")
+
+    def test_bark_failure_does_not_retry_a_post(self):
+        with patch.object(monitor.platform, "system", return_value="Linux"):
+            with patch.object(monitor.urllib.request, "urlopen", side_effect=OSError("network lost")):
+                with patch.object(monitor.shutil, "which", return_value="curl"):
+                    with patch.object(monitor, "curl_request") as retry:
+                        with self.assertRaises(monitor.MonitorError):
+                            monitor.request("https://example.com", payload={"body": "test"},
+                                            retry_with_curl=False)
+        retry.assert_not_called()
+
+    def test_bark_network_settings_preserve_existing_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(monitor, "monitor_home", return_value=Path(directory)):
+                monitor.write_json(Path(directory) / "config.json", {"barkUrl": "https://api.day.app/test-secret"})
+                result = monitor.save_bark_network("proxy", "http://127.0.0.1:7897")
+                self.assertEqual(result, {"mode": "proxy", "proxyConfigured": True})
+                monitor.save_config("https://api.day.app/test-secret", False)
+                config = monitor.load_config()
+                self.assertEqual(config["barkProxyMode"], "proxy")
+                self.assertEqual(config["barkProxyAddress"], "http://127.0.0.1:7897")
+                self.assertEqual(config["barkUrl"], "https://api.day.app/test-secret")
+                monitor.save_bark_network("direct")
+                self.assertEqual(monitor.load_config()["barkProxyMode"], "direct")
+
+    def test_proxy_mode_requires_proxy_url(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(monitor, "monitor_home", return_value=Path(directory)):
+                with self.assertRaisesRegex(monitor.MonitorError, "代理地址"):
+                    monitor.save_bark_network("proxy")
+                self.assertFalse((Path(directory) / "config.json").exists())
+
+    def test_proxy_mode_rejects_unsupported_or_malformed_url(self):
+        for address in ("https://127.0.0.1:7897", "http://127.0.0.1:bad"):
+            with self.subTest(address=address):
+                with self.assertRaises(monitor.MonitorError):
+                    monitor.validate_bark_network("proxy", address)
 
 
 if __name__ == "__main__":

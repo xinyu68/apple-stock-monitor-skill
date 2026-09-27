@@ -30,6 +30,9 @@ On Windows, prefer `py -3` when `python` is unavailable. The script performs one
 
 ```text
 python scripts/apple_stock_monitor.py configure --bark-url "https://api.day.app/KEY" --test
+python scripts/apple_stock_monitor.py bark-network --mode proxy --proxy-url "http://127.0.0.1:7897"
+python scripts/apple_stock_monitor.py bark-network --mode direct
+python scripts/apple_stock_monitor.py bark-network --mode inherit
 python scripts/apple_stock_monitor.py check --city 北京 --model "iPhone 18 Pro Max" --capacity "256 GB" --color 银色
 python scripts/apple_stock_monitor.py check --city 北京 --store 三里屯 --model "iPhone 17" --capacity "256 GB" --color 白色
 python scripts/apple_stock_monitor.py check --scope china --model "iPhone 18 Pro Max"
@@ -42,6 +45,6 @@ Use at least a three-minute interval for `--scope china`; one minute is acceptab
 
 The script distinguishes `available`, `unavailable`, `ineligible`, and `unknown`. It sends a deduplicated Bark alert after repeated query failures and a recovery alert after service returns. Configure the Agent automation to report its own failed runs, because a script that never starts cannot send Bark.
 
-Bark itself does not require a proxy. If a push fails, test connectivity from the machine running the monitor and distinguish direct access from the effective system or process proxy. A successful browser request alone does not establish that the monitor has a working direct route. Never print the Bark URL or Key while diagnosing.
+Bark itself does not require a proxy. Its network mode defaults to `inherit` (the HTTP client's default proxy discovery); `direct` bypasses proxies, and `proxy` uses the configured HTTP proxy URL. `bark-network` changes only Bark routing, not Apple inventory queries, and preserves the saved Bark URL. If a push fails, test from the monitor's machine; a browser success alone does not prove direct access. Never print the Bark URL or Key while diagnosing.
 
 For Apple endpoint changes, product-code changes, missing stores, HTTP 541, schema errors, or repair work, read [references/maintenance.md](references/maintenance.md). For scheduler behavior and host limitations, read [references/scheduling.md](references/scheduling.md).
